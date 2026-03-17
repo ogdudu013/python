@@ -26,58 +26,54 @@ def enviar_ftp(arquivo_local, pasta_remota):
 
 def buscar_libgen_leve(nome):
     print(f"🔎 Buscando '{nome}'...")
-    # Usando um mirror que aceita buscas simples via URL
-    url = f"https://libgen.is/search.php?req={nome.replace(' ', '+')}&column=def"
-    try:
-        r = requests.get(url, timeout=10)
-        # Busca links de download (pattern simples para não usar BS4/LXML)
-        links = re.findall(r'href="http://library\.lol/main/([A-Z0-9]+)"', r.text)
-        
-        if not links:
-            print("❌ Nenhum livro encontrado.")
-            return None
+    
+    # Lista de mirrors oficiais do Libgen
+    mirrors = [
+        "https://libgen.rs",
+        "https://libgen.is",
+        "https://libgen.st"
+    ]
+    
+    nome_busca = nome.replace(' ', '+')
+    
+    for base_url in mirrors:
+        try:
+            print(f"📡 Tentando servidor: {base_url}...")
+            search_url = f"{base_url}/search.php?req={nome_busca}&column=def"
+            
+            # Aumentamos o timeout para 20 segundos para conexões lentas
+            r = requests.get(search_url, timeout=20)
+            
+            # Busca o ID do livro no HTML
+            links = re.findall(r'href="http://library\.lol/main/([A-Z0-9]+)"', r.text)
+            
+            if links:
+                page_url = f"http://library.lol/main/{links[0]}"
+                print(f"🔗 Link encontrado! Acessando página de download...")
+                
+                r_page = requests.get(page_url, timeout=20)
+                
+                # Tenta encontrar o link direto (GET)
+                download_link = re.findall(r'href="(https?://GET\.gen\.lib\.rus\.ec/[^"]+)"', r_page.text)
+                
+                if not download_link:
+                    # Alternativa: IPFS/Cloudflare
+                    download_link = re.findall(r'href="(https?://cloudflare-ipfs\.com/[^"]+)"', r_page.text)
 
-        # Pega o primeiro resultado e vai para a página de download
-        page_url = f"http://library.lol/main/{links[0]}"
-        r_page = requests.get(page_url, timeout=10)
-        download_link = re.findall(r'href="(https?://GET\.gen\.lib\.rus\.ec/[^"]+)"', r_page.text)
+                if download_link:
+                    nome_arq = f"{nome[:20].replace(' ', '_')}.pdf"
+                    print("📥 Baixando arquivo para o Termux...")
+                    
+                    with requests.get(download_link[0], stream=True, timeout=30) as res:
+                        res.raise_for_status()
+                        with open(nome_arq, 'wb') as f:
+                            for chunk in res.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                    return nome_arq
         
-        if not download_link:
-            # Tenta um segundo padrão de link (Cloudflare/IPFS)
-            download_link = re.findall(r'href="(https?://cloudflare-ipfs\.com/[^"]+)"', r_page.text)
+        except Exception as e:
+            print(f"⚠️ Servidor {base_url} falhou ou deu timeout. Tentando próximo...")
+            continue
 
-        if download_link:
-            nome_arq = f"{nome[:20].replace(' ', '_')}.pdf"
-            print("📥 Baixando arquivo...")
-            res = requests.get(download_link[0], stream=True)
-            with open(nome_arq, 'wb') as f:
-                for chunk in res.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            return nome_arq
-    except Exception as e:
-        print(f"❌ Erro na busca: {e}")
+    print("❌ Todos os servidores do Libgen falharam. Tente novamente mais tarde.")
     return None
-
-def main():
-    while True:
-        os.system('clear')
-        print("=== DOWNLOADER VELOZ (SEM LXML) ===")
-        print("1. YouTube")
-        print("2. Livros/HQs")
-        print("0. Sair")
-        op = input("\n➔ Escolha: ")
-
-        if op == '1':
-            link = input("🔗 Link: ")
-            with yt_dlp.YoutubeDL({'outtmpl': '%(title)s.%(ext)s'}) as ydl:
-                info = ydl.extract_info(link, download=True)
-                enviar_ftp(ydl.prepare_filename(info), "videos")
-        elif op == '2':
-            nome = input("📖 Nome: ")
-            arq = buscar_libgen_leve(nome)
-            if arq: enviar_ftp(arq, "leitura")
-        elif op == '0': break
-        input("\n[Enter para voltar]")
-
-if __name__ == "__main__":
-    main()
