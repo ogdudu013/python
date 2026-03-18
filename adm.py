@@ -55,21 +55,31 @@ def baixar_yt(busca):
         return nome_arquivo, info['title']
 
 def registrar_api(arquivo, titulo):
-    print("📝 Registrando no banco de dados...")
+    print("📝 Registrando no banco de dados (Modo Camuflado)...")
     payload = {'filename': arquivo, 'title': titulo}
-    try:
-        # Adicionamos um timeout maior para a API
-        r = requests.post(f"{API_URL}?action=register_ftp&token={TOKEN}", data=payload, timeout=20)
-        print(f"📡 Resposta: {r.text}")
-    except Exception as e:
-        print(f"❌ Erro na API (Banco): {e}")
+    
+    # Criamos uma sessão para simular um navegador real
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    })
 
-if __name__ == "__main__":
-    musica = input("Nome da música: ")
     try:
-        arq, tit = baixar_yt(musica)
-        if subir_ftp(arq):
-            registrar_api(arq, tit)
-            if os.path.exists(arq): os.remove(arq)
+        # 1. Fazemos um "ping" no site para pegar os cookies de segurança do ByetHost
+        session.get(SITE_URL, timeout=10)
+        time.sleep(2) # Espera 2 segundos para o servidor "relaxar"
+        
+        # 2. Fazemos o POST com o Token na URL (mais seguro contra bloqueios)
+        url_com_token = f"{API_URL}?action=register_ftp&token={TOKEN}"
+        r = session.post(url_com_token, data=payload, timeout=20)
+        
+        if r.status_code == 200:
+            print(f"📡 Sucesso! Resposta: {r.text}")
+        else:
+            print(f"⚠️ O servidor respondeu com código {r.status_code}. Verifique o admin_api.php")
+            
     except Exception as e:
-        print(f"Erro Geral: {e}")
+        print(f"❌ Erro na API: {e}")
+        print("DICA: Tente abrir o seu site no navegador agora e depois rode o script novamente.")
