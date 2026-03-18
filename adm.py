@@ -1,85 +1,64 @@
-import requests
 import os
 import yt_dlp
+import requests
+from ftplib import FTP
 import time
 
 # --- CONFIGURAÇÕES ---
+FTP_HOST = "ftpupload.net"
+FTP_USER = "b6_41303686"
+FTP_PASS = "TUA_SENHA_AQUI" # Coloca a tua senha do vPanel/FTP
+
 SITE_URL = "http://Pikachutech.byethost6.com"
 API_URL = f"{SITE_URL}/admin_api.php"
 TOKEN = "og.dudu013"
 
-def baixar_youtube(busca):
+def baixar_yt(busca):
     ydl_opts = {
         'format': 'bestaudio/best',
-        'outtmpl': 'musica_temp.%(ext)s',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
+        'outtmpl': 'temp.%(ext)s',
+        'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '128'}],
         'quiet': True,
         'noplaylist': True
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        print(f"🔎 A procurar no YouTube: {busca}")
+        print(f"🔎 Procurando no YT: {busca}")
         info = ydl.extract_info(f"ytsearch1:{busca}", download=True)['entries'][0]
-        return "musica_temp.mp3", info['title']
+        # Criar nome de arquivo único para evitar conflitos
+        nome_arquivo = f"song_{int(time.time())}.mp3"
+        os.rename('temp.mp3', nome_arquivo)
+        return nome_arquivo, info['title']
 
-def enviar_para_site(caminho, titulo):
-    print(f"🚀 A enviar '{titulo}' para o site...")
-    
-    # Enviamos o token na URL para evitar bloqueios de firewall do ByetHost
-    params = {'action': 'upload', 'token': TOKEN}
-    headers = {'X-API-TOKEN': TOKEN}
-    
+def subir_ftp(arquivo):
+    print(f"🚀 Enviando via FTP para htdocs/uploads/songs...")
     try:
-        with open(caminho, 'rb') as f:
-            files = {'media_file': (f"{titulo}.mp3", f, 'audio/mpeg')}
-            # Algumas hospedagens gratuitas exigem cookies, fazemos o post direto
-            r = requests.post(API_URL, params=params, files=files, headers=headers)
+        ftp = FTP(FTP_HOST)
+        ftp.login(user=FTP_USER, passwd=FTP_PASS)
+        # Caminho padrão do ByetHost para pastas públicas
+        ftp.cwd('htdocs/uploads/songs') 
         
-        if "success" in r.text:
-            print("✅ Sucesso! Música adicionada ao catálogo.")
-        else:
-            print(f"⚠️ Resposta do Servidor: {r.text}")
-            
+        with open(arquivo, 'rb') as f:
+            ftp.storbinary(f'STOR {arquivo}', f)
+        
+        ftp.quit()
+        print("✅ Ficheiro carregado no servidor!")
+        return True
     except Exception as e:
-        print(f"❌ Erro na ligação: {e}")
-    finally:
-        if os.path.exists(caminho):
-            os.remove(caminho)
+        print(f"❌ Erro no FTP: {e}")
+        return False
 
-def menu():
-    while True:
-        print("\n--- ⚡ PIKACHU TECH ADMIN BOT ---")
-        print("1. Download YT -> Upload Site")
-        print("2. Editar Nome (ID)")
-        print("3. Deletar Música (ID)")
-        print("4. Sair")
-        
-        op = input("\nEscolha: ")
-
-        if op == '1':
-            nome = input("Nome da música/artista: ")
-            try:
-                arq, tit = baixar_youtube(nome)
-                enviar_para_site(arq, tit)
-            except Exception as e:
-                print(f"Erro: {e}")
-
-        elif op == '2':
-            idx = input("ID da música: ")
-            novo = input("Novo título: ")
-            r = requests.post(f"{API_URL}?action=edit&token={TOKEN}", data={'id':idx, 'title':novo})
-            print(r.text)
-
-        elif op == '3':
-            idx = input("ID para deletar: ")
-            r = requests.get(f"{API_URL}?action=delete&id={idx}&token={TOKEN}")
-            print(r.text)
-
-        elif op == '4':
-            break
+def avisar_banco(arquivo, titulo):
+    print("📝 Registando na Base de Dados...")
+    payload = {'filename': arquivo, 'title': titulo}
+    r = requests.post(f"{API_URL}?action=register_ftp&token={TOKEN}", data=payload)
+    print(f"📡 Resposta API: {r.text}")
 
 if __name__ == "__main__":
-    menu()
+    musica = input("Nome da música: ")
+    try:
+        arq, tit = baixar_yt(musica)
+        if subir_ftp(arq):
+            avisar_banco(arq, tit)
+            if os.path.exists(arq): os.remove(arq)
+    except Exception as e:
+        print(f"Erro Geral: {e}")
