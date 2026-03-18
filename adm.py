@@ -7,7 +7,7 @@ import time
 # --- CONFIGURAÇÕES ---
 FTP_HOST = "ftpupload.net"
 FTP_USER = "b6_41303686"
-FTP_PASS = "TUA_SENHA_AQUI" # Coloca a tua senha do vPanel/FTP
+FTP_PASS = "0512pablo" # Coloca a tua senha do vPanel/FTP
 
 SITE_URL = "http://Pikachutech.byethost6.com"
 API_URL = f"{SITE_URL}/admin_api.php"
