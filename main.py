@@ -1,100 +1,101 @@
 import os
-import sys
 import yt_dlp
 import requests
+import re
 from ftplib import FTP, error_perm
-from libgen_api import LibgenSearch
-import config # Seu arquivo com as senhas
-
-def limpar_tela():
-    os.system('clear')
+import config
 
 def enviar_ftp(arquivo_local, pasta_remota):
-    print(f"\n🚀 Conectando ao ByetHost ({config.FTP_HOST})...")
+    print(f"\n🚀 Enviando para o ByetHost...")
     try:
         ftp = FTP(config.FTP_HOST)
         ftp.login(user=config.FTP_USER, passwd=config.FTP_PASS)
-        
         ftp.cwd('/htdocs/')
         try:
             ftp.cwd(pasta_remota)
         except error_perm:
-            print(f"📁 Criando pasta '{pasta_remota}'...")
             ftp.mkd(pasta_remota)
             ftp.cwd(pasta_remota)
-
-        print(f"📤 Enviando: {os.path.basename(arquivo_local)}")
         with open(arquivo_local, 'rb') as f:
             ftp.storbinary(f'STOR {os.path.basename(arquivo_local)}', f)
-        
         ftp.quit()
-        print(f"✅ Sucesso! Arquivo enviado para /htdocs/{pasta_remota}/")
+        print(f"✅ Sucesso!")
         os.remove(arquivo_local)
     except Exception as e:
-        print(f"❌ Erro no FTP: {e}")
+        print(f"❌ Erro FTP: {e}")
 
-def menu_youtube():
-    link = input("\n🔗 Cole o link do YouTube: ")
-    print("⏳ Baixando vídeo...")
-    ydl_opts = {'format': 'best', 'outtmpl': '%(title)s.%(ext)s'}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(link, download=True)
-        arquivo = ydl.prepare_filename(info)
-        enviar_ftp(arquivo, "videos")
-
-def menu_livros_hq(tipo):
-    nome = input(f"\n📖 Digite o nome do(a) {tipo}: ")
-    print(f"🔎 Buscando '{nome}' no Libgen...")
-    s = LibgenSearch()
-    resultados = s.search_title(nome)
+def buscar_pdf_universal(nome):
+    """Busca PDFs usando o motor do DuckDuckGo (mais rápido e sem bloqueio)"""
+    print(f"🔎 Buscando '{nome}' na Web...")
     
-    if not resultados:
-        print("❌ Nada encontrado.")
-        return
-
-    # Mostra os 3 primeiros resultados
-    print("\nResultados encontrados:")
-    for i, res in enumerate(resultados[:3]):
-        print(f"[{i+1}] {res['Title']} ({res['Extension']}) - {res['Size']}")
+    # Query focada em arquivos PDF e HQs
+    query = f"{nome} filetype:pdf"
+    url = f"https://duckduckgo.com/html/?q={query.replace(' ', '+')}"
     
-    escolha = input("\nEscolha o número (ou '0' para cancelar): ")
-    if escolha == '1' or escolha == '2' or escolha == '3':
-        item = resultados[int(escolha)-1]
-        links = s.resolve_download_links(item)
-        print("📥 Baixando arquivo...")
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
+        # Extrai links que terminam em .pdf
+        links = re.findall(r'href="(https?://[^"]+\.pdf)"', r.text)
         
-        nome_arq = f"{item['Title'][:30]}.{item['Extension']}".replace(" ", "_")
-        r = requests.get(links['GET'], allow_redirects=True)
-        with open(nome_arq, 'wb') as f:
-            f.write(r.content)
-        
-        pasta = "livros" if tipo == "Livro" else "hqs"
-        enviar_ftp(nome_arq, pasta)
+        if not links:
+            print("❌ Nenhum arquivo encontrado diretamente. Tentando busca secundária...")
+            # Tenta um padrão de link de download comum
+            links = re.findall(r'(https?://[^\s<>"]+\.(?:pdf|epub|cbr))', r.text)
+
+        if links:
+            # Filtra links inúteis (como propagandas)
+            link_final = links[0]
+            nome_arq = f"{nome[:20].replace(' ', '_')}.pdf"
+            
+            print(f"🔗 Link encontrado! Baixando de: {link_final[:50]}...")
+            
+            with requests.get(link_final, stream=True, timeout=30, headers=headers) as res:
+                res.raise_for_status()
+                with open(nome_arq, 'wb') as f:
+                    for chunk in res.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            return nome_arq
+        else:
+            print("❌ Nada encontrado nos servidores públicos.")
+            
+    except Exception as e:
+        print(f"❌ Erro na busca: {e}")
+    return None
 
 def main():
     while True:
-        limpar_tela()
-        print("=== MASTER DOWNLOADER TERMUX ===")
-        print("1. Baixar Vídeo (YouTube)")
-        print("2. Buscar Livro")
-        print("3. Buscar HQ / Comic")
+        os.system('clear')
+        print("=== DOWNLOADER ULTRA-LEVE (NO-LXML) ===")
+        print("1. YouTube (Vídeo)")
+        print("2. Livros/HQs (Busca Universal PDF)")
         print("0. Sair")
-        
-        opcao = input("\nEscolha uma opção: ")
-        
-        if opcao == '1':
-            menu_youtube()
-        elif opcao == '2':
-            menu_livros_hq("Livro")
-        elif opcao == '3':
-            menu_livros_hq("HQ")
-        elif opcao == '0':
-            print("Saindo...")
+        op = input("\n➔ Escolha: ")
+
+        if op == '1':
+            link = input("🔗 Link do YouTube: ")
+            print("⏳ Processando vídeo...")
+            try:
+                with yt_dlp.YoutubeDL({'outtmpl': '%(title)s.%(ext)s', 'quiet': True}) as ydl:
+                    info = ydl.extract_info(link, download=True)
+                    enviar_ftp(ydl.prepare_filename(info), "videos")
+            except Exception as e:
+                print(f"❌ Erro no YouTube: {e}")
+                
+        elif op == '2':
+            nome = input("📖 Nome do Livro/HQ: ")
+            arq = buscar_pdf_universal(nome)
+            if arq: 
+                enviar_ftp(arq, "leitura")
+            else:
+                print("⚠️ Tente ser mais específico no nome.")
+                
+        elif op == '0': 
             break
-        else:
-            print("Opção inválida!")
-        
-        input("\nPressione Enter para voltar ao menu...")
+        input("\n[Pressione Enter para voltar ao menu]")
 
 if __name__ == "__main__":
     main()
