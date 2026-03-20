@@ -1,6 +1,6 @@
 (async function() {
     // 1. Substitua pela sua chave real ou deixe o prompt
-    const KEY = 'SUA_CHAVE_AQUI'; 
+    const KEY = 'AIzaSyAfiyvoVXDIestmwW-B4bh7a-gfS0LkZSU'; 
 
     // 2. Criar o painel visual
     const div = document.createElement('div');
