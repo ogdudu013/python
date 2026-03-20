@@ -1,81 +1,93 @@
 import requests
 from bs4 import BeautifulSoup
 import os
+import re
 from urllib.parse import urljoin
 
 class PikachuBot:
     def __init__(self, url):
         self.url = url
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
-        # Cria uma pasta para salvar os arquivos
-        self.diretorio = "pikachu_downloads"
+        self.diretorio = "pikachu_data"
         if not os.path.exists(self.diretorio):
             os.makedirs(self.diretorio)
 
-    def baixar_arquivo(self, link_arquivo):
-        nome_arquivo = os.path.join(self.diretorio, link_arquivo.split("/")[-1])
+    def extrair_apis(self, html):
+        """Busca por padrões de URLs de API e endpoints no texto/scripts"""
+        print("\n🔍 [Pikachu] Rastreando Endpoints e APIs...")
+        # Regex para encontrar padrões comuns de API e caminhos /v1/, /api/, etc.
+        padrao_api = r'https?://[\w\.-]+(?:/api/|/v\d/|[\w\.-]+\.json)'
+        endpoints = re.findall(padrao_api, html)
         
-        # Resolve links relativos (ex: /img/foto.jpg -> https://site.com/img/foto.jpg)
-        url_completa = urljoin(self.url, link_arquivo)
+        # Busca caminhos relativos que sugerem APIs
+        caminhos_relativos = re.findall(r'["\'](/\w+/(?:v\d/|api/)[\w\-/]+)["\']', html)
+        
+        encontrados = list(set(endpoints + caminhos_relativos))
+        for api in encontrados:
+            print(f" ✨ API/Endpoint Detectado: {api}")
+        return encontrados
+
+    def buscar_ferramentas_e_arquivos(self):
+        print(f"⚡ [Pikachu] Iniciando Scan Potente: {self.url}")
         
         try:
-            print(f"📥 Baixando: {nome_arquivo}...")
-            with requests.get(url_completa, headers=self.headers, stream=True, timeout=15) as r:
+            res = requests.get(self.url, headers=self.headers, timeout=15)
+            html_content = res.text
+            soup = BeautifulSoup(html_content, 'html.parser')
+
+            # 1. Extração de APIs
+            self.extrair_apis(html_content)
+
+            # 2. Extração de Arquivos e Ferramentas (Scripts JS, Configs)
+            print("\n🛠️ [Pikachu] Analisando Ferramentas e Scripts...")
+            tags_alvo = {
+                'script': 'src',    # Arquivos JS (onde ficam as chaves e rotas)
+                'a': 'href',        # Links de download
+                'link': 'href',     # CSS e Manifestos
+                'img': 'src'        # Mídia
+            }
+
+            arquivos = []
+            extensoes_tools = ('.js', '.json', '.xml', '.config', '.env', '.pdf', '.zip')
+
+            for tag, attr in tags_alvo.items():
+                for item in soup.find_all(tag):
+                    link = item.get(attr)
+                    if link:
+                        url_completa = urljoin(self.url, link)
+                        if any(url_completa.lower().endswith(ext) for ext in extensoes_tools):
+                            arquivos.append(url_completa)
+
+            arquivos = list(set(arquivos))
+            print(f"📦 Total de {len(arquivos)} ferramentas/arquivos identificados.")
+
+            if arquivos:
+                op = input("\n📥 Descarregar todos os arquivos encontrados? (s/n): ")
+                if op.lower() == 's':
+                    for link in arquivos:
+                        self.baixar(link)
+            
+        except Exception as e:
+            print(f"💥 Erro: {e}")
+
+    def baixar(self, link):
+        try:
+            nome = os.path.join(self.diretorio, link.split("/")[-1].split("?")[0])
+            with requests.get(link, headers=self.headers, stream=True, timeout=10) as r:
                 r.raise_for_status()
-                with open(nome_arquivo, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
+                with open(nome, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=1024):
                         f.write(chunk)
-            print(f"✅ Concluído!")
-        except Exception as e:
-            print(f"❌ Erro ao baixar {link_arquivo}: {e}")
-
-    def capturar_e_baixar(self):
-        print(f"⚡ [Pikachu] Analisando: {self.url}...")
-        
-        try:
-            response = requests.get(self.url, headers=self.headers, timeout=10)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
-                # Lista de extensões que o Pikachu vai capturar
-                extensoes_alvo = ('.pdf', '.zip', '.png', '.jpg', '.jpeg', '.mp4', '.docx')
-                
-                links = soup.find_all(['a', 'img']) # Procura em links e tags de imagem
-                arquivos_para_baixar = []
-
-                for tag in links:
-                    # Pega o atributo 'href' de links ou 'src' de imagens
-                    link_bruto = tag.get('href') or tag.get('src')
-                    
-                    if link_bruto and any(link_bruto.lower().endswith(ext) for ext in extensoes_alvo):
-                        arquivos_para_baixar.append(link_bruto)
-
-                # Remove duplicatas
-                arquivos_para_baixar = list(set(arquivos_para_baixar))
-
-                if arquivos_para_baixar:
-                    print(f"🎯 Encontrei {len(arquivos_para_baixar)} arquivos!")
-                    confirmar = input("Deseja iniciar o download de todos? (s/n): ")
-                    if confirmar.lower() == 's':
-                        for arq in arquivos_para_baixar:
-                            self.baixar_arquivo(arq)
-                    else:
-                        print("⚡ Operação cancelada pelo mestre.")
-                else:
-                    print("❌ Nenhum arquivo interessante encontrado.")
-
-            else:
-                print(f"🚫 Site bloqueou o acesso. Status: {response.status_code}")
-
-        except Exception as e:
-            print(f"💥 Erro crítico: {e}")
+            print(f"✅ {nome} salvo!")
+        except:
+            pass
 
 if __name__ == "__main__":
-    url_alvo = input("Digite a URL do site: ")
-    if not url_alvo.startswith("http"):
-        url_alvo = "https://" + url_alvo
-        
-    bot = PikachuBot(url_alvo)
-    bot.capturar_e_baixar()
+    url_input = input("Digite a URL alvo: ").strip()
+    if not url_input.startswith("http"):
+        url_input = "https://" + url_input
+    
+    bot = PikachuBot(url_input)
+    bot.buscar_ferramentas_e_arquivos()
