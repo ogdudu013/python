@@ -1,109 +1,106 @@
 import requests
 import time
-import json
 
 class RoboSalaDoFuturo:
     def __init__(self, ra, digito, uf, senha):
         self.ra_completo = f"{ra}{digito}{uf}".upper()
         self.senha = senha
         self.session = requests.Session()
+        self.token_sed = None
+        self.auth_token_cmsp = None
         
-        # Headers base extraídos dos seus logs reais
-        self.headers = {
+        self.headers_base = {
             "Host": "sedintegracoes.educacao.sp.gov.br",
             "Accept": "application/json, text/plain, */*",
             "Ocp-Apim-Subscription-Key": "d701a2043aa24d7ebb37e9adf60d043b",
             "User-Agent": "Mozilla/5.0 (Linux; Android 15; SM-A145M) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.119 Mobile Safari/537.36",
             "Origin": "https://saladofuturo.educacao.sp.gov.br",
             "Referer": "https://saladofuturo.educacao.sp.gov.br/",
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
             "Content-Type": "application/json"
         }
 
     def fazer_login(self):
         url = "https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/credenciais/api/LoginCompletoToken"
-        payload = {
-            "user": self.ra_completo,
-            "senha": self.senha
-        }
+        payload = {"user": self.ra_completo, "senha": self.senha}
 
         print(f"[*] Autenticando: {self.ra_completo}...")
-        try:
-            res = self.session.post(url, json=payload, headers=self.headers)
-            
-            if res.status_code == 200:
-                dados = res.json()
-                self.token = dados.get("token")
-                self.user_id = dados["DadosUsuario"]["CD_USUARIO"]
-                # Atualiza o header com o Bearer para as próximas chamadas
-                self.headers["Authorization"] = f"Bearer {self.token}"
-                print(f"[V] Login OK! Bem-vindo, {dados['DadosUsuario']['NAME']}")
-                return True
-            else:
-                print(f"[X] Erro {res.status_code}: {res.text}")
-                return False
-        except Exception as e:
-            print(f"[X] Falha na conexão: {e}")
+        res = self.session.post(url, json=payload, headers=self.headers_base)
+        
+        if res.status_code == 200:
+            dados = res.json()
+            self.token_sed = dados.get("token")
+            print(f"[V] Login SED OK! Bem-vindo, {dados['DadosUsuario']['NAME']}")
+            return True
+        else:
+            print(f"[X] Erro no login SED: {res.status_code}")
             return False
 
     def obter_token_cmsp(self):
-        """Troca o token da SED pelo token do CMSP (IP.TV) para resolver tarefas"""
+        """Troca o Bearer da SED pelo Token do CMSP (IP.TV)"""
+        print("[*] Trocando token para acesso às tarefas...")
         url = "https://edusp-api.ip.tv/registration/edusp/token"
-        payload = {"token": self.token}
-        headers_iptv = {
+        payload = {"token": self.token_sed}
+        headers = {
             "x-api-realm": "edusp",
             "Content-Type": "application/json",
-            "User-Agent": self.headers["User-Agent"]
+            "User-Agent": self.headers_base["User-Agent"]
         }
         
-        res = self.session.post(url, json=payload, headers=headers_iptv)
+        res = self.session.post(url, json=payload, headers=headers)
         if res.status_code == 200:
             self.auth_token_cmsp = res.json().get("auth_token")
+            print("[V] Token CMSP obtido com sucesso.")
             return True
-        return False
+        else:
+            print(f"[X] Erro ao obter token CMSP: {res.status_code}")
+            return False
 
     def listar_e_resolver_tarefas(self):
-        if not hasattr(self, 'auth_token_cmsp'):
-            self.obter_token_cmsp()
+        if not self.auth_token_cmsp:
+            if not self.obter_token_cmsp(): return
 
         url_list = "https://edusp-api.ip.tv/tms/task/todo?limit=50"
         headers_task = {
             "Authorization": self.auth_token_cmsp,
-            "x-api-realm": "edusp"
+            "x-api-realm": "edusp",
+            "User-Agent": self.headers_base["User-Agent"]
         }
 
         res = self.session.get(url_list, headers=headers_task)
+        if res.status_code != 200:
+            print(f"[X] Erro ao listar tarefas: {res.status_code}")
+            return
+
         tarefas = res.json().get("items", [])
-        
-        print(f"[*] Total de tarefas pendentes: {len(tarefas)}")
+        print(f"[*] Tarefas pendentes encontradas: {len(tarefas)}")
 
         for task in tarefas:
-            task_id = task['id']
-            print(f"[*] Resolvendo: {task['title']}")
+            t_id = task['id']
+            print(f"[*] Resolvendo: {task['title']} (ID: {t_id})")
             
-            # Endpoint de conclusão
-            url_ans = f"https://edusp-api.ip.tv/tms/task/{task_id}/answer"
+            url_ans = f"https://edusp-api.ip.tv/tms/task/{t_id}/answer"
             payload_ans = {
-                "answers": {}, # Envia vazio para marcar como visto/feito
+                "answers": {}, 
                 "last_question": True,
-                "duration": 75 # Simula que o aluno ficou 75 segundos na tarefa
+                "duration": 70 
             }
             
             finish = self.session.post(url_ans, json=payload_ans, headers=headers_task)
             if finish.status_code == 200:
-                print(f"    [V] Tarefa finalizada.")
+                print("    [V] Concluída.")
             else:
-                print(f"    [!] Erro ao finalizar.")
+                print(f"    [!] Falha: {finish.status_code}")
             
-            time.sleep(1) # Delay para evitar detecção
+            time.sleep(1.5) # Pequena pausa para segurança
 
-# --- CONFIGURAÇÃO E EXECUÇÃO ---
+# --- EXECUÇÃO ---
 RA = "110877468"
 DIGITO = "4"
 UF = "SP"
-SENHA = "Pp@12345678" # Insira sua senha real entre as aspas
+SENHA = "SUA_SENHA_AQUI" 
 
 robo = RoboSalaDoFuturo(RA, DIGITO, UF, SENHA)
 
 if robo.fazer_login():
-    robo.listar_e_resolver_tarefas()
+    if robo.obter_token_cmsp():
+        robo.listar_e_resolver_tarefas()
