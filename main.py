@@ -8,87 +8,100 @@ class RoboSalaDoFuturo:
         self.session = requests.Session()
         self.token_sed = None
         self.auth_token_cmsp = None
-        
-        # Headers que o seu Eruda mostrou serem necessários
-        self.headers_padrao = {
-            "Accept": "application/json",
+        # User-Agent padronizado para todas as chamadas
+        self.ua = "Mozilla/5.0 (Linux; Android 15; SM-A145M) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+
+    def fazer_login_sed(self):
+        url = "https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/credenciais/api/LoginCompletoToken"
+        headers = {
+            "Ocp-Apim-Subscription-Key": "d701a2043aa24d7ebb37e9adf60d043b",
             "Content-Type": "application/json",
+            "User-Agent": self.ua,
+            "Origin": "https://saladofuturo.educacao.sp.gov.br",
+            "Referer": "https://saladofuturo.educacao.sp.gov.br/"
+        }
+        payload = {"user": self.ra_completo, "senha": self.senha}
+
+        print(f"[*] Fazendo login na SED...")
+        res = self.session.post(url, json=payload, headers=headers)
+        if res.status_code == 200:
+            self.token_sed = res.json().get("token")
+            print("[V] Login SED realizado.")
+            return True
+        else:
+            print(f"[X] Erro SED: {res.status_code}")
+            return False
+
+    def obter_token_cmsp(self):
+        print("[*] Trocando token para o CMSP (IP.TV)...")
+        url = "https://edusp-api.ip.tv/registration/edusp/token"
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
             "x-api-realm": "edusp",
             "x-api-platform": "webclient",
-            "User-Agent": "Mozilla/5.0 (Linux; Android 15; SM-A145M) AppleWebKit/537.36"
+            "User-Agent": self.ua
+        }
+        
+        payload = {"token": self.token_sed}
+        res = self.session.post(url, json=payload, headers=headers)
+        
+        if res.status_code == 200:
+            dados = res.json()
+            self.auth_token_cmsp = dados.get("auth_token")
+            print(f"[V] Token CMSP obtido! Usuário: {dados.get('name')}")
+            return True
+        else:
+            print(f"[X] Erro na troca: {res.status_code}")
+            return False
+
+    def resolver_tarefas(self):
+        print("[*] Buscando tarefas pendentes...")
+        # Adicionamos os filtros que vimos no seu Eruda para evitar lista vazia
+        url_list = "https://edusp-api.ip.tv/tms/task/todo?limit=100&answer_statuses=pending&answer_statuses=draft"
+        
+        headers = {
+            "Authorization": self.auth_token_cmsp,
+            "x-api-realm": "edusp",
+            "x-api-platform": "webclient",
+            "User-Agent": self.ua,
+            "Accept": "application/json"
         }
 
-    def login(self):
-        print(f"[*] A aceder à SED: {self.ra_completo}...")
-        url = "https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/credenciais/api/LoginCompletoToken"
-        h = {"Ocp-Apim-Subscription-Key": "d701a2043aa24d7ebb37e9adf60d043b", "Content-Type": "application/json"}
-        p = {"user": self.ra_completo, "senha": self.senha}
-        
-        try:
-            r = self.session.post(url, json=p, headers=h)
-            if r.status_code == 200:
-                self.token_sed = r.json().get("token")
-                print("[V] Login SED OK.")
-                return True
-            print(f"[X] Erro SED: {r.status_code}")
-        except Exception as e:
-            print(f"[X] Erro de rede: {e}")
-        return False
-
-    def trocar_token(self):
-        print("[*] A obter chave x-api-key do CMSP...")
-        url = "https://edusp-api.ip.tv/registration/edusp/token"
-        payload = {"token": self.token_sed}
-        
-        r = self.session.post(url, json=payload, headers=self.headers_padrao)
-        if r.status_code == 200:
-            self.auth_token_cmsp = r.json().get("auth_token")
-            print("[V] Chave CMSP obtida.")
-            return True
-        print(f"[X] Erro no CMSP: {r.status_code}")
-        return False
-
-    def resolver(self):
-        print("[*] A procurar tarefas pendentes...")
-        # URL com os filtros que o seu log mostrou
-        url = "https://edusp-api.ip.tv/tms/task/todo?expired_only=false&limit=100&offset=0&filter_expired=true&answer_statuses=draft&answer_statuses=pending"
-        
-        headers = self.headers_padrao.copy()
-        headers["x-api-key"] = self.auth_token_cmsp # Usa a chave capturada no Eruda
-        
-        res = self.session.get(url, headers=headers)
+        res = self.session.get(url_list, headers=headers)
         if res.status_code == 200:
-            tarefas = res.json()
-            if not tarefas:
-                print("[!] Nenhuma tarefa encontrada com estes filtros.")
-                return
-
-            print(f"[+] Encontradas {len(tarefas)} tarefas!")
-            for t in tarefas:
-                t_id = t['id']
-                print(f"[*] A completar: {t.get('title')}")
+            tarefas = res.json().get("items", [])
+            print(f"[i] Encontradas {len(tarefas)} tarefas.")
+            
+            for task in tarefas:
+                t_id = task['id']
+                print(f"[*] Resolvendo: {task['title']}")
                 
-                # Endpoint de resposta
-                u_ans = f"https://edusp-api.ip.tv/tms/task/{t_id}/answer"
-                p_ans = {"answers": {}, "last_question": True, "duration": 110}
+                url_ans = f"https://edusp-api.ip.tv/tms/task/{t_id}/answer"
+                payload_ans = {
+                    "answers": {}, 
+                    "last_question": True,
+                    "duration": 90 # Simula um tempo maior para evitar detecção
+                }
                 
-                envio = self.session.post(u_ans, json=p_ans, headers=headers)
-                if envio.status_code == 200:
-                    print("    [OK] Feita.")
+                resp = self.session.post(url_ans, json=payload_ans, headers=headers)
+                if resp.status_code == 200:
+                    print("    [V] Tarefa finalizada.")
                 else:
-                    print(f"    [ERRO] Status: {envio.status_code}")
-                time.sleep(1.5)
+                    print(f"    [!] Erro: {resp.status_code}")
+                time.sleep(2) # Pausa maior entre tarefas
         else:
-            print(f"[X] Falha ao listar tarefas: {res.status_code}")
+            print(f"[X] Erro ao listar: {res.status_code}")
 
 # --- EXECUÇÃO ---
-# Coloque os seus dados aqui
 RA = "110877468"
 DIGITO = "4"
 UF = "SP"
 SENHA = "Pp@12345678"
 
-bot = RoboSalaDoFuturo(RA, DIGITO, UF, SENHA)
-if bot.login():
-    if bot.trocar_token():
-        bot.resolver()
+robo = RoboSalaDoFuturo(RA, DIGITO, UF, SENHA)
+
+if robo.fazer_login_sed():
+    if robo.obter_token_cmsp():
+        robo.resolver_tarefas()
