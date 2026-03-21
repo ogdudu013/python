@@ -97,7 +97,7 @@ class RoboSalaDoFuturo:
 RA = "110877468"
 DIGITO = "4"
 UF = "SP"
-SENHA = "SUA_SENHA_AQUI" 
+SENHA = "Pp@12345678" 
 
 robo = RoboSalaDoFuturo(RA, DIGITO, UF, SENHA)
 
