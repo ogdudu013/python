@@ -1,93 +1,62 @@
 import requests
-from bs4 import BeautifulSoup
-import os
-import re
-from urllib.parse import urljoin
+import time
 
-class PikachuBot:
-    def __init__(self, url):
-        self.url = url
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        self.diretorio = "pikachu_data"
-        if not os.path.exists(self.diretorio):
-            os.makedirs(self.diretorio)
+class TarefasBot:
+    def __init__(self, ra, digito, senha):
+        self.username = f"{ra}{digito}sp"
+        self.senha = senha
+        self.session = requests.Session()
+        self.sub_key = "d701a2043aa24d7ebb37e9adf60d043b"
+        self.token_sed = None
+        self.token_iptv = None
 
-    def extrair_apis(self, html):
-        """Busca por padrões de URLs de API e endpoints no texto/scripts"""
-        print("\n🔍 [Pikachu] Rastreando Endpoints e APIs...")
-        # Regex para encontrar padrões comuns de API e caminhos /v1/, /api/, etc.
-        padrao_api = r'https?://[\w\.-]+(?:/api/|/v\d/|[\w\.-]+\.json)'
-        endpoints = re.findall(padrao_api, html)
+    def login(self):
+        # 1. Login na SED via o Proxy que você descobriu
+        url = "https://taskitos.cupiditys.lol/p/https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/credenciais/api/LoginCompletoToken"
+        payload = {"user": self.username, "senha": self.senha}
+        headers = {"ocp-apim-subscription-key": self.sub_key}
         
-        # Busca caminhos relativos que sugerem APIs
-        caminhos_relativos = re.findall(r'["\'](/\w+/(?:v\d/|api/)[\w\-/]+)["\']', html)
+        response = self.session.post(url, json=payload, headers=headers)
+        if response.status_code == 200:
+            self.token_sed = response.json().get("token")
+            print(f"[*] Login SED Sucesso: {response.json()['DadosUsuario']['NAME']}")
+            return True
+        return False
+
+    def get_iptv_token(self):
+        # 2. Troca de Token para IP.TV
+        url = "https://edusp-api.ip.tv/registration/edusp/token"
+        payload = {"token": self.token_sed}
+        headers = {"x-api-realm": "edusp", "x-api-platform": "webclient"}
         
-        encontrados = list(set(endpoints + caminhos_relativos))
-        for api in encontrados:
-            print(f" ✨ API/Endpoint Detectado: {api}")
-        return encontrados
+        response = self.session.post(url, json=payload, headers=headers)
+        self.token_iptv = response.json().get("auth_token")
+        return self.token_iptv is not None
 
-    def buscar_ferramentas_e_arquivos(self):
-        print(f"⚡ [Pikachu] Iniciando Scan Potente: {self.url}")
+    def realizar_tarefas(self):
+        # 3. Listar tarefas pendentes
+        url_list = "https://edusp-api.ip.tv/tms/task/todo?limit=10"
+        headers = {"Authorization": self.token_iptv, "x-api-realm": "edusp"}
         
-        try:
-            res = requests.get(self.url, headers=self.headers, timeout=15)
-            html_content = res.text
-            soup = BeautifulSoup(html_content, 'html.parser')
-
-            # 1. Extração de APIs
-            self.extrair_apis(html_content)
-
-            # 2. Extração de Arquivos e Ferramentas (Scripts JS, Configs)
-            print("\n🛠️ [Pikachu] Analisando Ferramentas e Scripts...")
-            tags_alvo = {
-                'script': 'src',    # Arquivos JS (onde ficam as chaves e rotas)
-                'a': 'href',        # Links de download
-                'link': 'href',     # CSS e Manifestos
-                'img': 'src'        # Mídia
-            }
-
-            arquivos = []
-            extensoes_tools = ('.js', '.json', '.xml', '.config', '.env', '.pdf', '.zip')
-
-            for tag, attr in tags_alvo.items():
-                for item in soup.find_all(tag):
-                    link = item.get(attr)
-                    if link:
-                        url_completa = urljoin(self.url, link)
-                        if any(url_completa.lower().endswith(ext) for ext in extensoes_tools):
-                            arquivos.append(url_completa)
-
-            arquivos = list(set(arquivos))
-            print(f"📦 Total de {len(arquivos)} ferramentas/arquivos identificados.")
-
-            if arquivos:
-                op = input("\n📥 Descarregar todos os arquivos encontrados? (s/n): ")
-                if op.lower() == 's':
-                    for link in arquivos:
-                        self.baixar(link)
+        tarefas = self.session.get(url_list, headers=headers).json()
+        
+        for item in tarefas.get('items', []):
+            print(f"[!] Resolvendo: {item['title']}")
             
-        except Exception as e:
-            print(f"💥 Erro: {e}")
+            # 4. Enviar a resposta (O 'pulo do gato')
+            # Geralmente é um POST para /answer com o ID da tarefa
+            answer_url = f"https://edusp-api.ip.tv/tms/task/{item['id']}/answer"
+            # O payload aqui depende de como a tarefa é estruturada (múltipla escolha, etc)
+            # Exemplo genérico de conclusão:
+            answer_payload = {"answers": {}, "last_question": True} 
+            
+            res = self.session.post(answer_url, json=answer_payload, headers=headers)
+            if res.status_code == 200:
+                print(f"[V] Tarefa concluída!")
+            time.sleep(1) # Delay para não ser bloqueado por spam
 
-    def baixar(self, link):
-        try:
-            nome = os.path.join(self.diretorio, link.split("/")[-1].split("?")[0])
-            with requests.get(link, headers=self.headers, stream=True, timeout=10) as r:
-                r.raise_for_status()
-                with open(nome, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=1024):
-                        f.write(chunk)
-            print(f"✅ {nome} salvo!")
-        except:
-            pass
-
-if __name__ == "__main__":
-    url_input = input("Digite a URL alvo: ").strip()
-    if not url_input.startswith("http"):
-        url_input = "https://" + url_input
-    
-    bot = PikachuBot(url_input)
-    bot.buscar_ferramentas_e_arquivos()
+# --- Execução ---
+bot = TarefasBot("110877468", "4", "SuaSenhaAqui")
+if bot.login():
+    if bot.get_iptv_token():
+        bot.realizar_tarefas()
