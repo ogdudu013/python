@@ -1,60 +1,131 @@
 import requests
 import time
 import io
-from ftplib import FTP # Mantemos o FTP apenas para enviar o log.txt de volta
+import json
+from ftplib import FTP
 
 # ================= CONFIGURAÇÕES =================
 API_URL = "http://pikachutech.byethost6.com/bot_api.php"
 GEMINI_KEY = "AIzaSyCzUldmRFcer6FlHJTmD3mLSadgNF-4Sjk"
-# FTP para LOGS (Opcional, para aparecer no seu site)
+
+# Configurações de Log (FTP)
 FTP_HOST = "ftpupload.net"
 FTP_USER = "b6_41303686"
 FTP_PASS = "0512pablo"
 
-def enviar_log_ftp(mensagem):
-    try:
-        with FTP(FTP_HOST, FTP_USER, FTP_PASS) as ftp:
-            linha = f"[{time.strftime('%H:%M:%S')}] {mensagem}\n"
-            ftp.storbinary('APPE htdocs/log.txt', io.BytesIO(linha.encode('utf-8')))
-    except: pass
+class PKScriptBot:
+    def __init__(self, ra, digito, uf, senha):
+        self.ra_completo = f"{ra}{digito}{uf}".upper()
+        self.senha = senha
+        self.session = requests.Session()
+        self.auth_token = None
+        self.ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-def perguntar_ao_gemini(texto):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
-    prompt = f"Resolva a tarefa escolar: {texto}. Responda apenas o numero da alternativa correta (0, 1, 2...)."
-    try:
-        res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=10)
-        resp = res.json()['candidates'][0]['content']['parts'][0]['text']
-        return int("".join(filter(str.isdigit, resp))[0])
-    except: return 0
+    def enviar_log(self, msg):
+        print(f"[LOG] {msg}")
+        try:
+            with FTP(FTP_HOST, FTP_USER, FTP_PASS) as ftp:
+                linha = f"[{time.strftime('%H:%M:%S')}] {msg}\n"
+                ftp.storbinary('APPE htdocs/log.txt', io.BytesIO(linha.encode('utf-8')))
+        except: pass
 
-def processar_login(dados):
-    ra = dados.get('ra')
-    digito = dados.get('digito')
-    uf = dados.get('uf')
-    senha = dados.get('senha')
-    
-    print(f"[!] Processando RA: {ra}...")
-    enviar_log_ftp(f"Iniciando Bot para RA {ra}")
-    
-    # --- Aqui entra sua logica de requests do CMSP ---
-    # (Use a mesma lógica de login e resposta que já tínhamos)
-    
-    time.sleep(5) # Simulação de tempo de tarefa
-    enviar_log_ftp(f"RA {ra} finalizado com sucesso!")
+    def perguntar_gemini(self, pergunta):
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        prompt = f"Resolva essa questão de múltipla escolha escolar. Responda APENAS o número do índice da alternativa correta (0 para A, 1 para B, 2 para C...). Questão: {pergunta}"
+        try:
+            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=10)
+            txt = res.json()['candidates'][0]['content']['parts'][0]['text']
+            num = "".join(filter(str.isdigit, txt))
+            return int(num[0]) if num else 0
+        except: return 0
 
-# --- LOOP DA FILA ---
-print(">>> PK SCRIPT FILA DE ESPERA ATIVA <<<")
-while True:
-    try:
-        response = requests.get(API_URL, timeout=15)
-        res_json = response.json()
-        
-        if res_json['status'] == "sucesso":
-            processar_login(res_json['dados'])
-        else:
-            # Se a fila estiver vazia, ele espera 10 segundos e tenta de novo
-            time.sleep(10)
+    def login(self):
+        try:
+            # 1. Token SED
+            url_sed = "https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/credenciais/api/LoginCompletoToken"
+            h_sed = {"Ocp-Apim-Subscription-Key": "d701a2043aa24d7ebb37e9adf60d043b", "Content-Type": "application/json"}
+            r_sed = self.session.post(url_sed, json={"user": self.ra_completo, "senha": self.senha}, headers=h_sed, timeout=15)
             
-    except Exception as e:
-        print(f"Erro ao conectar na API: {e}")
-        time.sleep(20)
+            if r_sed.status_code != 200: return False
+            
+            # 2. Token CMSP
+            t_sed = r_sed.json().get("token")
+            url_cmsp = "https://edusp-api.ip.tv/registration/edusp/token"
+            r_cmsp = self.session.post(url_cmsp, json={"token": t_sed}, headers={"x-api-realm": "edusp"}, timeout=15)
+            
+            if r_cmsp.status_code == 200:
+                self.auth_token = r_cmsp.json().get("auth_token")
+                return True
+        except: pass
+        return False
+
+    def resolver_tudo(self):
+        self.enviar_log(f"Iniciando RA {self.ra_completo}...")
+        if not self.login():
+            self.enviar_log("Erro: Login recusado (RA ou Senha incorretos).")
+            return
+
+        headers = {"x-api-key": self.auth_token, "x-api-realm": "edusp", "User-Agent": self.ua}
+        res = self.session.get("https://edusp-api.ip.tv/tms/task/todo?limit=15", headers=headers, timeout=15)
+        
+        if res.status_code == 200:
+            tarefas = res.json()
+            self.enviar_log(f"Encontradas {len(tarefas)} tarefas.")
+            
+            for t in tarefas:
+                t_id = t['id']
+                titulo = t.get('title', 'Tarefa')
+                escolha = self.perguntar_gemini(titulo)
+                
+                url_ans = f"https://edusp-api.ip.tv/tms/task/{t_id}/answer"
+                payload = {"answers": {"0": escolha}, "last_question": True, "duration": 120}
+                self.session.post(url_ans, json=payload, headers=headers, timeout=15)
+                
+                self.enviar_log(f"Feito: {titulo[:20]} (IA marcou {escolha})")
+                time.sleep(2)
+            
+            self.enviar_log(">>> Finalizado com sucesso!")
+
+# --- SISTEMA DE FILA ANTI-BLOQUEIO BYETHOST ---
+def iniciar_monitoramento():
+    print(">>> PK SCRIPT FILA DE ESPERA ATIVA (MODO HTTP) <<<")
+    
+    # Sessão para enganar o sistema anti-bot do ByetHost
+    web_session = requests.Session()
+    web_session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+    })
+
+    while True:
+        try:
+            # Tenta ler a API PHP
+            response = web_session.get(API_URL, timeout=20)
+            
+            # Se o ByetHost retornar 200 mas o conteúdo não for JSON, 
+            # pode ser a página de "Anti-Abuse" pedindo cookie.
+            try:
+                api_data = response.json()
+            except:
+                print("[-] Erro: ByetHost bloqueou o script. Abra o site no Chrome do celular uma vez.")
+                time.sleep(30)
+                continue
+
+            if api_data.get('status') == "sucesso":
+                d = api_data['dados']
+                # Cria a instância do bot e executa
+                bot = PKScriptBot(d['ra'], d['digito'], d['uf'], d['senha'])
+                bot.resolver_tudo()
+            else:
+                # Fila vazia, aguarda em silêncio
+                time.sleep(15)
+                
+        except Exception as e:
+            print(f"Erro de Conexão: {e}")
+            time.sleep(20)
+
+if __name__ == "__main__":
+    iniciar_monitoramento()
