@@ -7,7 +7,7 @@ from ftplib import FTP
 # ================= CONFIGURAÇÕES =================
 API_URL = "http://pikachutech.byethost6.com/bot_api.php"
 GEMINI_KEY = "AIzaSyCzUldmRFcer6FlHJTmD3mLSadgNF-4Sjk"
-COOKIE_BYET = "9275145aed2835abcbd7e624548339d4"
+COOKIE_BYET = "9275145aed2835abcbd7e624548339d4" # Verifique se este ainda é o atual
 
 # Configurações de Log (FTP)
 FTP_HOST = "ftpupload.net"
@@ -20,7 +20,8 @@ class PKScriptBot:
         self.senha = senha
         self.session = requests.Session()
         self.auth_token = None
-        self.ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        # User-agent de Android (mais discreto)
+        self.ua = "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36"
 
     def enviar_log(self, msg):
         print(f"[LOG] {msg}")
@@ -32,7 +33,7 @@ class PKScriptBot:
 
     def perguntar_gemini(self, pergunta):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
-        prompt = f"Resolva essa questão de múltipla escolha escolar. Responda APENAS o número do índice da alternativa correta (0 para A, 1 para B, 2 para C...). Questão: {pergunta}"
+        prompt = f"Resolva essa questão de múltipla escolha escolar. Responda APENAS o número do índice da alternativa correta (0 para A, 1 para B...). Questão: {pergunta}"
         try:
             res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=10)
             txt = res.json()['candidates'][0]['content']['parts'][0]['text']
@@ -56,63 +57,64 @@ class PKScriptBot:
         return False
 
     def resolver_tudo(self):
-        self.enviar_log(f"Iniciando RA {self.ra_completo}...")
+        self.enviar_log(f"Processando RA {self.ra_completo}")
         if not self.login():
-            self.enviar_log("Erro: Login recusado (RA/Senha incorretos).")
-            return
+            self.enviar_log("Erro: Login recusado.")
+            return False
 
         headers = {"x-api-key": self.auth_token, "x-api-realm": "edusp", "User-Agent": self.ua}
-        res = self.session.get("https://edusp-api.ip.tv/tms/task/todo?limit=15", headers=headers, timeout=15)
+        res = self.session.get("https://edusp-api.ip.tv/tms/task/todo?limit=10", headers=headers, timeout=15)
         
         if res.status_code == 200:
             tarefas = res.json()
-            self.enviar_log(f"Encontradas {len(tarefas)} tarefas.")
             for t in tarefas:
                 t_id = t['id']
-                titulo = t.get('title', 'Tarefa')
-                escolha = self.perguntar_gemini(titulo)
+                escolha = self.perguntar_gemini(t.get('title', ''))
                 url_ans = f"https://edusp-api.ip.tv/tms/task/{t_id}/answer"
-                payload = {"answers": {"0": escolha}, "last_question": True, "duration": 120}
-                self.session.post(url_ans, json=payload, headers=headers, timeout=15)
-                self.enviar_log(f"Feito: {titulo[:20]} (IA: {escolha})")
-                time.sleep(2)
-            self.enviar_log(">>> Finalizado com sucesso!")
+                payload = {"answers": {"0": escolha}, "last_question": True, "duration": 60}
+                self.session.post(url_ans, json=payload, headers=headers, timeout=10)
+                time.sleep(1)
+            self.enviar_log("Concluido!")
             return True
         return False
 
-# --- MONITORAMENTO COM BYPASS ---
 def monitorar():
-    print(f">>> PK SCRIPT ATIVO | COOKIE: {COOKIE_BYET[:10]}...")
+    print(">>> PK SCRIPT INICIADO <<<")
     
     web_session = requests.Session()
-    # Injetamos o cookie mágico aqui
-    web_session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Cookie": f"__test={COOKIE_BYET}"
-    })
+    headers_api = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36",
+        "Cookie": f"__test={COOKIE_BYET}",
+        "Accept": "application/json"
+    }
 
     while True:
         try:
-            # 1. Pede o dado para a API (sem limpar ainda)
-            response = web_session.get(API_URL, timeout=15)
+            response = web_session.get(API_URL, headers=headers_api, timeout=15)
+            
+            # Se não for JSON, o ByetHost bloqueou
+            if "text/html" in response.headers.get("Content-Type", ""):
+                print("[-] Erro: Cookie expirado ou bloqueio AES. Atualize o Cookie!")
+                time.sleep(30)
+                continue
+
             api_data = response.json()
 
             if api_data.get('status') == "sucesso":
                 d = api_data['dados']
-                # Tenta processar o RA
                 bot = PKScriptBot(d['ra'], d['digito'], d['uf'], d['senha'])
-                sucesso = bot.resolver_tudo()
-                
-                # 2. Se o bot terminou, avisa a API para limpar esse RA da fila
-                if sucesso:
-                    web_session.get(f"{API_URL}?limpar=1")
-                    print("[+] Fila limpa para o próximo.")
+                if bot.resolver_tudo():
+                    # Avisa o PHP para apagar a linha processada
+                    web_session.get(f"{API_URL}?limpar=1", headers=headers_api)
+                    print("[+] Fila limpa.")
             else:
-                # Se não tem ninguém na fila, descansa 15 segundos
                 time.sleep(15)
                 
+        except json.decoder.JSONDecodeError:
+            print("[-] O Servidor não enviou JSON (Bloqueio do ByetHost).")
+            time.sleep(20)
         except Exception as e:
-            print(f"[-] Erro: {e}")
+            print(f"[-] Erro inesperado: {e}")
             time.sleep(20)
 
 if __name__ == "__main__":
