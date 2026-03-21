@@ -8,7 +8,7 @@ class RoboSalaDoFuturo:
         self.session = requests.Session()
         self.token_sed = None
         self.auth_token_cmsp = None
-        # User-Agent padronizado para todas as chamadas
+        # User-Agent idêntico ao que funcionou no seu log
         self.ua = "Mozilla/5.0 (Linux; Android 15; SM-A145M) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
     def fazer_login_sed(self):
@@ -22,14 +22,18 @@ class RoboSalaDoFuturo:
         }
         payload = {"user": self.ra_completo, "senha": self.senha}
 
-        print(f"[*] Fazendo login na SED...")
-        res = self.session.post(url, json=payload, headers=headers)
-        if res.status_code == 200:
-            self.token_sed = res.json().get("token")
-            print("[V] Login SED realizado.")
-            return True
-        else:
-            print(f"[X] Erro SED: {res.status_code}")
+        print(f"[*] Fazendo login na SED: {self.ra_completo}...")
+        try:
+            res = self.session.post(url, json=payload, headers=headers)
+            if res.status_code == 200:
+                self.token_sed = res.json().get("token")
+                print("[V] Login SED realizado com sucesso.")
+                return True
+            else:
+                print(f"[X] Erro no login SED: {res.status_code}")
+                return False
+        except Exception as e:
+            print(f"[X] Erro de conexão: {e}")
             return False
 
     def obter_token_cmsp(self):
@@ -45,21 +49,37 @@ class RoboSalaDoFuturo:
         }
         
         payload = {"token": self.token_sed}
-        res = self.session.post(url, json=payload, headers=headers)
         
-        if res.status_code == 200:
-            dados = res.json()
-            self.auth_token_cmsp = dados.get("auth_token")
-            print(f"[V] Token CMSP obtido! Usuário: {dados.get('name')}")
-            return True
-        else:
-            print(f"[X] Erro na troca: {res.status_code}")
+        try:
+            res = self.session.post(url, json=payload, headers=headers)
+            if res.status_code == 200:
+                dados = res.json()
+                self.auth_token_cmsp = dados.get("auth_token")
+                print(f"[V] Token CMSP obtido! Usuário: {dados.get('name')}")
+                return True
+            else:
+                print(f"[X] Erro na troca de token: {res.status_code}")
+                return False
+        except Exception as e:
+            print(f"[X] Erro ao obter token CMSP: {e}")
             return False
 
     def resolver_tarefas(self):
         print("[*] Buscando tarefas pendentes...")
-        # Adicionamos os filtros que vimos no seu Eruda para evitar lista vazia
-        url_list = "https://edusp-api.ip.tv/tms/task/todo?limit=100&answer_statuses=pending&answer_statuses=draft"
+        url_list = "https://edusp-api.ip.tv/tms/task/todo"
+        
+        # Parâmetros exatos que o seu Eruda capturou para evitar Erro 400
+        params = {
+            "expired_only": "false",
+            "limit": "100",
+            "offset": "0",
+            "filter_expired": "true",
+            "is_exam": "false",
+            "with_answer": "true",
+            "is_essay": "false",
+            "answer_statuses": ["draft", "pending"],
+            "with_apply_moment": "true"
+        }
         
         headers = {
             "Authorization": self.auth_token_cmsp,
@@ -69,37 +89,53 @@ class RoboSalaDoFuturo:
             "Accept": "application/json"
         }
 
-        res = self.session.get(url_list, headers=headers)
-        if res.status_code == 200:
-            tarefas = res.json().get("items", [])
-            print(f"[i] Encontradas {len(tarefas)} tarefas.")
-            
-            for task in tarefas:
-                t_id = task['id']
-                print(f"[*] Resolvendo: {task['title']}")
+        try:
+            res = self.session.get(url_list, params=params, headers=headers)
+            if res.status_code == 200:
+                data = res.json()
+                # O CMSP pode retornar uma lista direta ou um objeto com 'items'
+                tarefas = data.get("items", data) if isinstance(data, dict) else data
                 
-                url_ans = f"https://edusp-api.ip.tv/tms/task/{t_id}/answer"
-                payload_ans = {
-                    "answers": {}, 
-                    "last_question": True,
-                    "duration": 90 # Simula um tempo maior para evitar detecção
-                }
-                
-                resp = self.session.post(url_ans, json=payload_ans, headers=headers)
-                if resp.status_code == 200:
-                    print("    [V] Tarefa finalizada.")
-                else:
-                    print(f"    [!] Erro: {resp.status_code}")
-                time.sleep(2) # Pausa maior entre tarefas
-        else:
-            print(f"[X] Erro ao listar: {res.status_code}")
+                if not tarefas:
+                    print("[!] Nenhuma tarefa pendente encontrada no momento.")
+                    return
 
-# --- EXECUÇÃO ---
+                print(f"[i] Encontradas {len(tarefas)} tarefas.")
+                
+                for task in tarefas:
+                    t_id = task['id']
+                    # Limpa caracteres especiais do título para o terminal
+                    titulo = task.get('title', 'Tarefa sem título').encode('ascii', 'ignore').decode('ascii')
+                    print(f"[*] Resolvendo: {titulo}")
+                    
+                    url_ans = f"https://edusp-api.ip.tv/tms/task/{t_id}/answer"
+                    payload_ans = {
+                        "answers": {}, # Marca como feito/participação
+                        "last_question": True,
+                        "duration": 110 # Simula 1 minuto e 50 segundos de "estudo"
+                    }
+                    
+                    resp = self.session.post(url_ans, json=payload_ans, headers=headers)
+                    if resp.status_code == 200:
+                        print("    [V] Concluída.")
+                    else:
+                        print(f"    [!] Erro ao enviar resposta: {resp.status_code}")
+                    
+                    time.sleep(2) # Pausa entre tarefas para segurança
+            else:
+                print(f"[X] Erro ao listar tarefas: {res.status_code}")
+                print(f"Detalhe: {res.text}")
+        except Exception as e:
+            print(f"[X] Erro durante o processamento: {e}")
+
+# --- CONFIGURAÇÃO ---
+# Substitua pelos seus dados reais
 RA = "110877468"
 DIGITO = "4"
 UF = "SP"
 SENHA = "Pp@12345678"
 
+# --- EXECUÇÃO ---
 robo = RoboSalaDoFuturo(RA, DIGITO, UF, SENHA)
 
 if robo.fazer_login_sed():
