@@ -1,62 +1,64 @@
 import requests
-import time
 
-class TarefasBot:
-    def __init__(self, ra, digito, senha):
-        self.username = f"{ra}{digito}sp"
-        self.senha = senha
-        self.session = requests.Session()
-        self.sub_key = "d701a2043aa24d7ebb37e9adf60d043b"
-        self.token_sed = None
-        self.token_iptv = None
+# Configurações extraídas dos seus headers
+SUB_KEY = "d701a2043aa24d7ebb37e9adf60d043b"
+BASE_URL = "https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi"
 
-    def login(self):
-        # 1. Login na SED via o Proxy que você descobriu
-        url = "https://taskitos.cupiditys.lol/p/https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/credenciais/api/LoginCompletoToken"
-        payload = {"user": self.username, "senha": self.senha}
-        headers = {"ocp-apim-subscription-key": self.sub_key}
+def executar_login_real(ra_completo, senha):
+    session = requests.Session()
+    
+    # 1. Endpoint de Login que você capturou
+    url_login = f"{BASE_URL}/credenciais/api/LoginCompletoToken"
+    
+    payload = {
+        "user": ra_completo, # Ex: "1108774684SP"
+        "senha": senha
+    }
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Ocp-Apim-Subscription-Key": SUB_KEY,
+        "Accept": "application/json, text/plain, */*"
+    }
+
+    print(f"[*] Tentando login para {ra_completo}...")
+    response = session.post(url_login, json=payload, headers=headers)
+
+    if response.status_code == 200:
+        dados = response.json()
+        token = dados.get("token")
+        user_id = dados["DadosUsuario"]["CD_USUARIO"]
+        print(f"[+] Sucesso! Token gerado para {dados['DadosUsuario']['NAME']}")
         
-        response = self.session.post(url, json=payload, headers=headers)
-        if response.status_code == 200:
-            self.token_sed = response.json().get("token")
-            print(f"[*] Login SED Sucesso: {response.json()['DadosUsuario']['NAME']}")
-            return True
-        return False
+        # Agora podemos usar esse token para outras chamadas
+        return session, token, user_id
+    else:
+        print(f"[!] Erro no login: {response.status_code}")
+        return None, None, None
 
-    def get_iptv_token(self):
-        # 2. Troca de Token para IP.TV
-        url = "https://edusp-api.ip.tv/registration/edusp/token"
-        payload = {"token": self.token_sed}
-        headers = {"x-api-realm": "edusp", "x-api-platform": "webclient"}
-        
-        response = self.session.post(url, json=payload, headers=headers)
-        self.token_iptv = response.json().get("auth_token")
-        return self.token_iptv is not None
+def listar_bimestres(session, token, escola_id):
+    # Endpoint de Bimestres que aparece no seu log
+    url = f"{BASE_URL}/apihubintegracoes/api/v2/Bimestre/ListarBimestres?escolaId={escola_id}"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Ocp-Apim-Subscription-Key": SUB_KEY
+    }
+    
+    res = session.get(url, headers=headers)
+    if res.status_code == 200:
+        bimestres = res.json().get("data", [])
+        print(f"\n[i] Bimestres encontrados para a escola {escola_id}:")
+        for b in bimestres:
+            print(f" - Bimestre {b['NumeroBimestre']} (Início: {b['DataInicio'][:10]})")
 
-    def realizar_tarefas(self):
-        # 3. Listar tarefas pendentes
-        url_list = "https://edusp-api.ip.tv/tms/task/todo?limit=10"
-        headers = {"Authorization": self.token_iptv, "x-api-realm": "edusp"}
-        
-        tarefas = self.session.get(url_list, headers=headers).json()
-        
-        for item in tarefas.get('items', []):
-            print(f"[!] Resolvendo: {item['title']}")
-            
-            # 4. Enviar a resposta (O 'pulo do gato')
-            # Geralmente é um POST para /answer com o ID da tarefa
-            answer_url = f"https://edusp-api.ip.tv/tms/task/{item['id']}/answer"
-            # O payload aqui depende de como a tarefa é estruturada (múltipla escolha, etc)
-            # Exemplo genérico de conclusão:
-            answer_payload = {"answers": {}, "last_question": True} 
-            
-            res = self.session.post(answer_url, json=answer_payload, headers=headers)
-            if res.status_code == 200:
-                print(f"[V] Tarefa concluída!")
-            time.sleep(1) # Delay para não ser bloqueado por spam
+# --- EXECUÇÃO ---
+# Substitua pela sua senha real para testar localmente
+RA_TESTE = "1108774684SP"
+SENHA_TESTE = "Pp@12345678" 
 
-# --- Execução ---
-bot = TarefasBot("110877468", "4", "SuaSenhaAqui")
-if bot.login():
-    if bot.get_iptv_token():
-        bot.realizar_tarefas()
+sessao, meu_token, meu_id = executar_login_real(RA_TESTE, SENHA_TESTE)
+
+if sessao:
+    # Testando a listagem de bimestres com seu ID de escola real (12178)
+    listar_bimestres(sessao, meu_token, 12178)
