@@ -7,9 +7,9 @@ from ftplib import FTP
 # ================= CONFIGURAÇÕES =================
 FTP_HOST = "ftpupload.net"
 FTP_USER = "b6_41303686"
-FTP_PASS = "SUA_SENHA_VPANEL"
+FTP_PASS = "0512pablo"
 
-GEMINI_KEY = "SUA_CHAVE_API_AQUI"
+GEMINI_KEY = "AIzaSyCzUldmRFcer6FlHJTmD3mLSadgNF-4Sjk"
 
 class PKScriptSaaS:
     def __init__(self, ra, digito, uf, senha):
