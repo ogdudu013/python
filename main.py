@@ -1,14 +1,15 @@
 import requests
 import time
 import sys
-import json  # Adicionado para manipular os payloads e respostas
+import json
 
 # === CONFIGURAÇÕES ===
 FIREBASE_URL = "https://pk-scripts-ofc-default-rtdb.firebaseio.com/fila"
 GEMINI_API_KEY = "AIzaSyCzUldmRFcer6FlHJTmD3mLSadgNF-4Sjk"
 
-class RoboSalaCompleto:
+class RoboSalaFinal:
     def __init__(self, ra, digito, uf, senha):
+        # Formata o RA exatamente como o sistema SED exige
         self.ra_completo = f"{ra}{digito}{uf}".upper()
         self.senha = senha
         self.uf = uf.lower()
@@ -16,124 +17,120 @@ class RoboSalaCompleto:
         self.ua = "Mozilla/5.0 (Linux; Android 15; SM-A145M) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
         self.auth_token = None
         self.nick = None
-        self.targets = ["r36cbf99f7e282664c-l", "rf5f73a6b29568391d-l", "1205", "1052", "1820", "764", "1834"]
+        self.targets = ["1205", "1052", "1820", "764", "1834"]
 
     def perguntar_gemini(self, prompt):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        headers = {'Content-Type': 'application/json'}
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
         try:
-            # Usamos json.dumps para garantir que o payload vá formatado corretamente
-            res = requests.post(url, data=json.dumps(payload), headers=headers, timeout=10)
+            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=10)
             return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         except: return None
 
     def login(self):
         try:
-            # Login SED
+            # 1. Login SED
             res_sed = self.session.post(
                 "https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/credenciais/api/LoginCompletoToken",
                 json={"user": self.ra_completo, "senha": self.senha},
-                headers={"Ocp-Apim-Subscription-Key": "d701a2043aa24d7ebb37e9adf60d043b", "Content-Type": "application/json", "User-Agent": self.ua}
+                headers={"Ocp-Apim-Subscription-Key": "d701a2043aa24d7ebb37e9adf60d043b", "Content-Type": "application/json", "User-Agent": self.ua},
+                timeout=15
             )
-            if res_sed.status_code != 200: return False
+            if res_sed.status_code != 200: 
+                print(f"    [!] Erro SED: {res_sed.status_code} (RA/Senha Incorretos)")
+                return False
             
             dados_sed = res_sed.json()
             self.nick = dados_sed.get("userName").lower()
 
-            # Login CMSP
+            # 2. Login CMSP
             res_cmsp = self.session.post(
                 "https://edusp-api.ip.tv/registration/edusp/token",
                 json={"token": dados_sed.get("token")},
-                headers={"Content-Type": "application/json", "x-api-realm": "edusp", "x-api-platform": "webclient", "User-Agent": self.ua}
+                headers={"Content-Type": "application/json", "x-api-realm": "edusp", "x-api-platform": "webclient", "User-Agent": self.ua},
+                timeout=15
             )
             if res_cmsp.status_code == 200:
-                dados_c = res_cmsp.json()
-                self.auth_token = dados_c.get("auth_token")
+                self.auth_token = res_cmsp.json().get("auth_token")
                 self.targets.append(f"{self.nick}-{self.uf}")
                 return True
-        except: return False
-        return False
+            return False
+        except Exception as e:
+            print(f"    [X] Erro na conexão de Login: {e}")
+            return False
 
-    def resolver_com_ia(self):
+    def resolver_tudo(self):
         if not self.login(): return False
 
-        headers = {
-            "x-api-key": self.auth_token, 
-            "x-api-realm": "edusp", 
-            "x-api-platform": "webclient", 
-            "Content-Type": "application/json",
-            "User-Agent": self.ua
-        }
-        
-        # Parâmetros de busca
+        headers = {"x-api-key": self.auth_token, "x-api-realm": "edusp", "Content-Type": "application/json", "User-Agent": self.ua}
         params = [("expired_only", "false"), ("limit", "50"), ("filter_expired", "true"), ("answer_statuses", "pending"), ("answer_statuses", "draft"), ("with_answer", "true")]
         for t in self.targets: params.append(("publication_target", t))
 
-        res = self.session.get("https://edusp-api.ip.tv/tms/task/todo", params=params, headers=headers)
-        if res.status_code != 200: return False
+        try:
+            res = self.session.get("https://edusp-api.ip.tv/tms/task/todo", params=params, headers=headers, timeout=15)
+            tarefas = res.json()
+            print(f"    [i] {len(tarefas)} tarefas para resolver.")
 
-        tarefas = res.json()
-        print(f"    [i] {len(tarefas)} tarefas encontradas.")
+            for task in tarefas:
+                t_id, a_id, p_target = task['id'], task.get('answer_id'), task.get("publication_target")
+                respostas_ia = {}
 
-        for task in tarefas:
-            t_id = task['id']
-            a_id = task.get('answer_id')
-            p_target = task.get("publication_target")
-            
-            respostas_ia = {}
-            try:
-                # Busca as questões da tarefa
-                url_q = f"https://edusp-api.ip.tv/tms/task/{t_id}/apply?room_name={p_target}"
-                questoes = self.session.get(url_q, headers=headers).json().get('questions', [])
+                # Tenta IA (Opcional)
+                try:
+                    url_q = f"https://edusp-api.ip.tv/tms/task/{t_id}/apply?room_name={p_target}"
+                    q_list = self.session.get(url_q, headers=headers).json().get('questions', [])
+                    for q in q_list:
+                        if q['type'] == 'single':
+                            prompt = f"ID:{q['id']}\nPergunta:{q['statement']}\nOpções:{json.dumps(q['options'])}\nResponda apenas o ID da correta."
+                            resp = "".join(filter(str.isdigit, str(self.perguntar_gemini(prompt))))
+                            if resp in q['options']:
+                                respostas_ia[str(q['id'])] = {"question_id": q['id'], "question_type": "single", "answer": {k: (k == resp) for k in q['options']}}
+                except: pass
+
+                payload = {"status": "submitted", "answers": respostas_ia, "accessed_on": "room", "executed_on": p_target, "duration": 185}
                 
-                for q in questoes:
-                    if q['type'] == 'single':
-                        # Monta o prompt para a IA
-                        opcoes_texto = "\n".join([f"{k}: {v['statement']}" for k,v in q['options'].items()])
-                        prompt = f"Pergunta: {q['statement']}\nAlternativas:\n{opcoes_texto}\nResponda apenas com o número da alternativa correta."
-                        
-                        resp = self.perguntar_gemini(prompt)
-                        id_correto = "".join(filter(str.isdigit, str(resp)))
-                        
-                        if id_correto in q['options']:
-                            respostas_ia[str(q['id'])] = {
-                                "question_id": q['id'], 
-                                "question_type": "single", 
-                                "answer": {k: (k == id_correto) for k in q['options']}
-                            }
-            except: pass
+                # PUT ou POST
+                if a_id:
+                    self.session.put(f"https://edusp-api.ip.tv/tms/task/{t_id}/answer/{a_id}", json=payload, headers=headers)
+                else:
+                    self.session.post(f"https://edusp-api.ip.tv/tms/task/{t_id}/answer", json=payload, headers=headers)
+                
+                print(f"    [V] Tarefa {t_id} enviada.")
+                time.sleep(1.5)
+            return True
+        except Exception as e:
+            print(f"    [!] Erro ao processar tarefas: {e}")
+            return False
 
-            payload = {
-                "status": "submitted",
-                "answers": respostas_ia,
-                "accessed_on": "room",
-                "executed_on": p_target,
-                "duration": 185
-            }
-
-            url_envio = f"https://edusp-api.ip.tv/tms/task/{t_id}/answer"
-            if a_id:
-                # Se for rascunho, usamos PUT e a URL com ID da resposta
-                self.session.put(f"{url_envio}/{a_id}", data=json.dumps(payload), headers=headers)
-            else:
-                self.session.post(url_envio, data=json.dumps(payload), headers=headers)
-            
-            print(f"    [V] Tarefa {t_id} enviada.")
-            time.sleep(2)
-        return True
-
-# --- LOOP PRINCIPAL ---
+# --- LOOP PRINCIPAL COM PROTEÇÃO ANTI-TRAVAMENTO ---
+print(">>> BOT PK SCRIPTS ONLINE <<<")
 while True:
     try:
         r_fila = requests.get(f"{FIREBASE_URL}.json", timeout=10)
         fila = r_fila.json()
+        
         if fila:
             for id_db, d in fila.items():
-                print(f"\n[FILA] RA: {d['ra']}")
-                bot = RoboSalaCompleto(d['ra'], d['digito'], d['uf'], d['senha'])
-                if bot.resolver_com_ia():
-                    requests.delete(f"{FIREBASE_URL}/{id_db}.json")
+                ra_aluno = d.get('ra')
+                print(f"\n[FILA] Processando RA: {ra_aluno}")
+                
+                bot = RoboSalaFinal(ra_aluno, d.get('digito'), d.get('uf'), d.get('senha'))
+                
+                # Tenta executar. Independente de dar erro de login ou não, 
+                # vamos remover da fila para não travar o bot infinitamente.
+                resultado = bot.resolver_tudo()
+                
+                if resultado:
+                    print(f"[SUCESSO] RA {ra_aluno} concluído.")
+                else:
+                    print(f"[ERRO] RA {ra_aluno} ignorado (Login ou Dados Inválidos).")
+                
+                # DELETA SEMPRE para evitar o loop infinito
+                requests.delete(f"{FIREBASE_URL}/{id_db}.json")
+                print(f"[LIMPEZA] Removido do Firebase.")
+                
+                time.sleep(2)
                 break 
-    except: pass
+    except Exception as e:
+        print(f"\r[!] Aguardando conexão ou fila vazia...", end="")
+    
     time.sleep(5)
