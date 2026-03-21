@@ -6,7 +6,7 @@ import io
 # ================= EXTERNO: CONFIGURAÇÕES FTP =================
 FTP_HOST = "ftpupload.net"
 FTP_USER = "b6_41303686"
-FTP_PASS = "A_TUA_SENHA_DO_VPANEL" # Substitui pela tua senha real
+FTP_PASS = "0512pablo" # Substitui pela tua senha real
 
 class PKScriptBot:
     def __init__(self, ra, digito, uf, senha):
