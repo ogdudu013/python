@@ -8,19 +8,19 @@ class RoboSalaDoFuturo:
         self.session = requests.Session()
         self.token_sed = None
         self.auth_token_cmsp = None
-        self.targets = [] # Lista para armazenar os IDs de turma/escola
+        self.nick = None
+        # Lista de targets extraída do seu log do Eruda
+        self.targets = [
+            "r36cbf99f7e282664c-l",
+            "rf5f73a6b29568391d-l",
+            "1205", "1052", "1820", "764", "1834"
+        ]
         self.ua = "Mozilla/5.0 (Linux; Android 15; SM-A145M) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
     def fazer_login_sed(self):
         url = "https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/credenciais/api/LoginCompletoToken"
-        headers = {
-            "Ocp-Apim-Subscription-Key": "d701a2043aa24d7ebb37e9adf60d043b",
-            "Content-Type": "application/json",
-            "User-Agent": self.ua
-        }
-        payload = {"user": self.ra_completo, "senha": self.senha}
-        print(f"[*] Fazendo login na SED: {self.ra_completo}...")
-        res = self.session.post(url, json=payload, headers=headers)
+        headers = {"Ocp-Apim-Subscription-Key": "d701a2043aa24d7ebb37e9adf60d043b", "Content-Type": "application/json", "User-Agent": self.ua}
+        res = self.session.post(url, json={"user": self.ra_completo, "senha": self.senha}, headers=headers)
         if res.status_code == 200:
             self.token_sed = res.json().get("token")
             print("[V] Login SED realizado.")
@@ -28,77 +28,63 @@ class RoboSalaDoFuturo:
         return False
 
     def obter_token_cmsp(self):
-        print("[*] Trocando token para o CMSP...")
         url = "https://edusp-api.ip.tv/registration/edusp/token"
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-realm": "edusp",
-            "x-api-platform": "webclient",
-            "User-Agent": self.ua
-        }
+        headers = {"Content-Type": "application/json", "x-api-realm": "edusp", "x-api-platform": "webclient", "User-Agent": self.ua}
         res = self.session.post(url, json={"token": self.token_sed}, headers=headers)
         if res.status_code == 200:
             dados = res.json()
             self.auth_token_cmsp = dados.get("auth_token")
-            # O CMSP retorna os targets no login! Vamos capturá-los:
-            self.targets = dados.get("publication_targets", [])
-            print(f"[V] Token CMSP obtido! {len(self.targets)} targets encontrados.")
+            # Adicionamos os targets dinâmicos que vêm do login aos fixos do log
+            novos_targets = dados.get("publication_targets", [])
+            self.targets = list(set(self.targets + novos_targets))
+            print(f"[V] Token CMSP obtido! Monitorando {len(self.targets)} canais de tarefas.")
             return True
         return False
 
     def resolver_tarefas(self):
-        print("[*] Buscando tarefas pendentes...")
+        print("[*] Verificando tarefas pendentes (A Fazer)...")
         url_list = "https://edusp-api.ip.tv/tms/task/todo"
-        
-        headers = {
-            "x-api-key": self.auth_token_cmsp,
-            "x-api-realm": "edusp",
-            "x-api-platform": "webclient",
-            "User-Agent": self.ua
-        }
+        headers = {"x-api-key": self.auth_token_cmsp, "x-api-realm": "edusp", "x-api-platform": "webclient", "User-Agent": self.ua}
 
-        # Construímos os parâmetros com os targets obrigatórios
+        # Parâmetros baseados no seu log de sucesso (GET 200)
         params = [
             ("expired_only", "false"),
-            ("limit", "50"),
+            ("limit", "100"),
             ("filter_expired", "true"),
+            ("answer_statuses", "pending"),
             ("answer_statuses", "draft"),
-            ("answer_statuses", "pending")
+            ("with_answer", "true")
         ]
-        
-        # Adiciona cada target na URL (o servidor exige múltiplos 'publication_target')
-        for target in self.targets:
-            params.append(("publication_target", target))
+        for t in self.targets:
+            params.append(("publication_target", t))
 
         res = self.session.get(url_list, params=params, headers=headers)
         
         if res.status_code == 200:
             tarefas = res.json()
-            lista = tarefas.get("items", tarefas) if isinstance(tarefas, dict) else tarefas
-            
-            if not lista:
-                print("[!] Nenhuma tarefa pendente encontrada.")
+            if not tarefas:
+                print("[!] Tudo em dia! Nenhuma tarefa pendente encontrada no momento.")
                 return
 
-            print(f"[i] Encontradas {len(lista)} tarefas.")
-            for task in lista:
+            print(f"[i] {len(tarefas)} tarefas encontradas para resolver.")
+            for task in tarefas:
                 t_id = task['id']
-                print(f"[*] Resolvendo: {task.get('title', 'Tarefa')}")
+                print(f"[*] Resolvendo: {task.get('title', 'Sem Título')}")
                 
                 url_ans = f"https://edusp-api.ip.tv/tms/task/{t_id}/answer"
-                payload_ans = {"answers": {}, "last_question": True, "duration": 100}
+                # Simulando tempo de leitura e enviando resposta vazia (participação)
+                payload_ans = {"answers": {}, "last_question": True, "duration": 120}
                 
                 resp = self.session.post(url_ans, json=payload_ans, headers=headers)
                 if resp.status_code == 200:
-                    print("    [V] Concluída.")
+                    print("    [V] Finalizada com sucesso.")
                 else:
-                    print(f"    [!] Erro {resp.status_code}")
+                    print(f"    [!] Falha ao enviar: {resp.status_code}")
                 time.sleep(2)
         else:
-            print(f"[X] Erro ao listar: {res.status_code}")
-            print(f"Detalhe: {res.text}")
+            print(f"[X] Erro na listagem: {res.status_code}")
 
-# --- EXECUÇÃO ---
+# --- INÍCIO ---
 RA = "110877468"
 DIGITO = "4"
 UF = "SP"
