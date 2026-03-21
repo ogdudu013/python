@@ -4,7 +4,7 @@ import json
 
 # === CONFIGURAÇÕES ===
 FIREBASE_URL = "https://pk-scripts-ofc-default-rtdb.firebaseio.com/fila"
-GEMINI_API_KEY = "SUA_CHAVE_AQUI"
+GEMINI_API_KEY = "AIzaSyCzUldmRFcer6FlHJTmD3mLSadgNF-4Sjk"
 
 class PKMotorV8:
     def __init__(self, ra, digito, uf, senha, id_db):
