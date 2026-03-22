@@ -6,7 +6,7 @@ from ftplib import FTP
 from concurrent.futures import ThreadPoolExecutor
 
 # --- CONFIGURAÇÕES DE AMBIENTE ---
-# Puxa a chave do sistema (Termux: export GEMINI_API_KEY="suachave")
+# Importante: No Termux, rode: export GEMINI_API_KEY="sua_chave"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # --- CONFIGURAÇÕES FIREBASE & FTP ---
@@ -16,15 +16,16 @@ FTP_USER = "b6_41303686"
 FTP_PASS = "0512pablo"
 
 def buscar_letra_ia(nome_musica):
-    """Busca letra usando Gemini 2.0 Flash com filtros de segurança desativados"""
+    """Busca a letra usando o modelo Gemini 2.0 Flash-Lite (v1)"""
     if not GEMINI_API_KEY:
         return "Letra nao disponivel (Erro de Config no Termux)."
 
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    # URL baseada no seu comando ListModels oficial
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-lite:generateContent?key={GEMINI_API_KEY}"
     
     payload = {
         "contents": [{
-            "parts": [{"text": f"Retorne apenas a letra completa da musica '{nome_musica}'. Nao adicione introducoes, titulos ou creditos. Apenas a letra pura."}]
+            "parts": [{"text": f"Retorne apenas a letra completa da musica '{nome_musica}'. Sem introducoes ou textos extras."}]
         }],
         "safetySettings": [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -35,19 +36,21 @@ def buscar_letra_ia(nome_musica):
     }
     
     try:
+        # Espera 1.5s para não estourar a cota de requisições por minuto
+        time.sleep(1.5) 
         res = requests.post(url, json=payload, timeout=15)
         data = res.json()
         
         if 'candidates' in data and data['candidates'][0]['content']['parts']:
             letra = data['candidates'][0]['content']['parts'][0]['text']
-            # Substitui quebras de linha pelo marcador do seu sistema PHP
             return letra.replace('\n', '[LF]')
         
-        # Log para depuração se a IA recusar
-        print(f"⚠️ IA recusou a letra: {data.get('error', {}).get('message', 'Bloqueio de seguranca ou Copyright')}")
+        if 'error' in data:
+            print(f"⚠️ Erro na IA: {data['error'].get('message')}")
+            
         return "Letra nao encontrada pela IA."
     except Exception as e:
-        print(f"❌ Erro conexao IA: {e}")
+        print(f"❌ Erro de conexao IA: {e}")
         return "Erro ao buscar letra."
 
 def baixar_e_enviar(busca):
@@ -68,7 +71,7 @@ def baixar_e_enviar(busca):
     }
 
     try:
-        # 1. DOWNLOAD (YT-DLP)
+        # 1. DOWNLOAD VIA YT-DLP
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             print(f"📥 Baixando: {busca}")
             info = ydl.extract_info(f"ytsearch1:{busca}", download=True)
@@ -77,37 +80,37 @@ def baixar_e_enviar(busca):
             titulo_real = info.get('title', busca).replace('|', '-')
             capa = info.get('thumbnail', '')
 
-        # 2. BUSCAR LETRA
-        print(f"🤖 Solicitando letra: {titulo_real}")
+        # 2. BUSCAR LETRA NA IA
+        print(f"🤖 Buscando letra: {titulo_real}")
         letra_ia = buscar_letra_ia(titulo_real)
 
-        # 3. CRIAR TXT DE METADADOS
+        # 3. CRIAR ARQUIVO DE DADOS PARA O PHP
         with open(txt_file, 'w', encoding='utf-8') as f:
             f.write(f"{titulo_real}|{audio_file}|{capa}|{letra_ia}")
 
-        # 4. ENVIO FTP
-        print(f"📤 Enviando para o servidor: {titulo_real}")
+        # 4. ENVIO FTP (ESTRUTURA INFINITYFREE)
+        print(f"📤 Enviando: {titulo_real}")
         ftp = FTP(FTP_HOST)
         ftp.login(user=FTP_USER, passwd=FTP_PASS)
         ftp.set_pasv(True)
         
-        # Pasta dos Áudios
+        # Sobe o Áudio
         ftp.cwd('/htdocs/uploads/songs')
         with open(audio_file, 'rb') as f:
             ftp.storbinary(f'STOR {audio_file}', f)
         
-        # Pasta da Fila (Metadados)
+        # Sobe o TXT (Gatilho)
         ftp.cwd('/htdocs/uploads/queue')
         with open(txt_file, 'rb') as f:
             ftp.storbinary(f'STOR {txt_file}', f)
             
         ftp.quit()
-        print(f"✅ Concluido: {titulo_real}")
+        print(f"✅ Sucesso total: {titulo_real}")
 
     except Exception as e:
-        print(f"❌ Erro fatal no processo: {e}")
+        print(f"❌ Erro no processo: {e}")
     finally:
-        # Limpa arquivos do Termux
+        # Limpeza local no Termux
         if os.path.exists(audio_file): os.remove(audio_file)
         if os.path.exists(txt_file): os.remove(txt_file)
 
@@ -115,11 +118,11 @@ def limpar_firebase():
     try: requests.delete(FIREBASE_URL)
     except: pass
 
-# --- LOOP PRINCIPAL ---
-print("-" * 30)
-print("🚀 PIKACHU MUSIC BOT ONLINE")
-print(f"📡 Monitorando: {FIREBASE_URL}")
-print("-" * 30)
+# --- LOOP DE MONITORAMENTO ---
+print("=" * 40)
+print("🚀 PIKACHU MUSIC BOT 2026")
+print(f"📡 Firebase: {FIREBASE_URL}")
+print("=" * 40)
 
 while True:
     try:
@@ -128,16 +131,16 @@ while True:
 
         if dados and 'musica' in dados:
             lista = [m.strip() for m in dados['musica'].split(';') if m.strip()]
-            print(f"\n📦 Lote recebido: {len(lista)} musica(s).")
+            print(f"\n📦 Nova fila com {len(lista)} musica(s).")
             
-            # max_workers=2 para evitar ban no FTP do ByetHost
+            # Processa em paralelo (2 por vez para não travar o FTP)
             with ThreadPoolExecutor(max_workers=2) as executor:
                 executor.map(baixar_e_enviar, lista)
             
             limpar_firebase()
-            print("✨ Fila limpa no Firebase.")
+            print("✨ Fila processada e Firebase limpo.")
         
         time.sleep(5)
     except Exception as e:
-        print(f"⚠️ Erro no Loop: {e}")
+        print(f"⚠️ Erro no monitoramento: {e}")
         time.sleep(10)
