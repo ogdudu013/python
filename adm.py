@@ -3,144 +3,94 @@ import yt_dlp
 import time
 import requests
 from ftplib import FTP
-from concurrent.futures import ThreadPoolExecutor
 
-# --- CONFIGURAÇÕES DE AMBIENTE ---
-# Importante: No Termux, rode: export GEMINI_API_KEY="sua_chave"
+# --- CONFIGURAÇÕES ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-# --- CONFIGURAÇÕES FIREBASE & FTP ---
 FIREBASE_URL = "https://pk-scripts-default-rtdb.firebaseio.com/comando.json"
 FTP_HOST = "ftpupload.net"
 FTP_USER = "b6_41303686"
 FTP_PASS = "0512pablo"
 
 def buscar_letra_ia(nome_musica):
-    """Busca a letra usando o modelo Gemini 2.0 Flash-Lite (v1)"""
-    if not GEMINI_API_KEY:
-        return "Letra nao disponivel (Erro de Config no Termux)."
-
-    # URL baseada no seu comando ListModels oficial
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-lite:generateContent?key={GEMINI_API_KEY}"
-    
-    payload = {
-        "contents": [{
-            "parts": [{"text": f"Retorne apenas a letra completa da musica '{nome_musica}'. Sem introducoes ou textos extras."}]
-        }],
-        "safetySettings": [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-        ]
-    }
+    if not GEMINI_API_KEY: return "Erro: API Key ausente."
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={GEMINI_API_KEY}"
     
     try:
-        # Espera 1.5s para não estourar a cota de requisições por minuto
-        time.sleep(1.5) 
-        res = requests.post(url, json=payload, timeout=15)
+        print(f"⏳ Respeitando cota da IA (15s)...")
+        time.sleep(15) 
+        res = requests.post(url, json={
+            "contents": [{"parts": [{"text": f"Letra da musica {nome_musica}. Retorne apenas a letra."}]}]
+        }, timeout=15)
         data = res.json()
-        
-        if 'candidates' in data and data['candidates'][0]['content']['parts']:
-            letra = data['candidates'][0]['content']['parts'][0]['text']
-            return letra.replace('\n', '[LF]')
-        
-        if 'error' in data:
-            print(f"⚠️ Erro na IA: {data['error'].get('message')}")
-            
-        return "Letra nao encontrada pela IA."
-    except Exception as e:
-        print(f"❌ Erro de conexao IA: {e}")
-        return "Erro ao buscar letra."
+        if 'candidates' in data:
+            return data['candidates'][0]['content']['parts'][0]['text'].replace('\n', '[LF]')
+        return "Letra nao encontrada."
+    except:
+        return "Erro na conexao com a IA."
 
-def baixar_e_enviar(busca):
-    if not busca.strip(): return
-
-    timestamp = int(time.time() * 1000)
-    nome_base = f"audio_{timestamp}"
-    audio_file = f"{nome_base}.mp3"
-    txt_file = f"data_{timestamp}.txt"
+def baixar_e_enviar(busca, id_unico):
+    audio_file = f"audio_{id_unico}.mp3"
+    txt_file = f"data_{id_unico}.txt"
 
     ydl_opts = {
         'format': 'bestaudio/best',
-        'outtmpl': f'{nome_base}.%(ext)s',
+        'outtmpl': f'audio_{id_unico}.%(ext)s',
         'ffmpeg_location': '/data/data/com.termux/files/usr/bin/ffmpeg',
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '128'}],
         'quiet': True,
-        'noplaylist': True,
     }
 
     try:
-        # 1. DOWNLOAD VIA YT-DLP
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            print(f"📥 Baixando: {busca}")
-            info = ydl.extract_info(f"ytsearch1:{busca}", download=True)
-            if 'entries' in info: info = info['entries'][0]
-            
-            titulo_real = info.get('title', busca).replace('|', '-')
+            print(f"📥 Baixando: {busca} (ID: {id_unico})")
+            info = ydl.extract_info(f"ytsearch1:{busca}", download=True)['entries'][0]
+            titulo = info.get('title', busca).replace('|', '-')
             capa = info.get('thumbnail', '')
 
-        # 2. BUSCAR LETRA NA IA
-        print(f"🤖 Buscando letra: {titulo_real}")
-        letra_ia = buscar_letra_ia(titulo_real)
+        letra = buscar_letra_ia(titulo)
 
-        # 3. CRIAR ARQUIVO DE DADOS PARA O PHP
         with open(txt_file, 'w', encoding='utf-8') as f:
-            f.write(f"{titulo_real}|{audio_file}|{capa}|{letra_ia}")
+            f.write(f"{titulo}|{audio_file}|{capa}|{letra}")
 
-        # 4. ENVIO FTP (ESTRUTURA INFINITYFREE)
-        print(f"📤 Enviando: {titulo_real}")
+        print(f"📤 Enviando FTP: {titulo}")
         ftp = FTP(FTP_HOST)
         ftp.login(user=FTP_USER, passwd=FTP_PASS)
         ftp.set_pasv(True)
         
-        # Sobe o Áudio
-        ftp.cwd('/htdocs/uploads/songs')
-        with open(audio_file, 'rb') as f:
-            ftp.storbinary(f'STOR {audio_file}', f)
+        with open(audio_file, 'rb') as f: ftp.storbinary(f'STOR /htdocs/uploads/songs/{audio_file}', f)
+        with open(txt_file, 'rb') as f: ftp.storbinary(f'STOR /htdocs/uploads/queue/{txt_file}', f)
         
-        # Sobe o TXT (Gatilho)
-        ftp.cwd('/htdocs/uploads/queue')
-        with open(txt_file, 'rb') as f:
-            ftp.storbinary(f'STOR {txt_file}', f)
-            
         ftp.quit()
-        print(f"✅ Sucesso total: {titulo_real}")
-
+        print(f"✅ Sucesso!")
     except Exception as e:
-        print(f"❌ Erro no processo: {e}")
+        print(f"❌ Erro: {e}")
     finally:
-        # Limpeza local no Termux
         if os.path.exists(audio_file): os.remove(audio_file)
         if os.path.exists(txt_file): os.remove(txt_file)
 
-def limpar_firebase():
-    try: requests.delete(FIREBASE_URL)
-    except: pass
-
-# --- LOOP DE MONITORAMENTO ---
-print("=" * 40)
-print("🚀 PIKACHU MUSIC BOT 2026")
-print(f"📡 Firebase: {FIREBASE_URL}")
-print("=" * 40)
-
+# --- LOOP PRINCIPAL ---
+print("🚀 Pikachu Music Bot 2026 ONLINE")
 while True:
     try:
-        response = requests.get(FIREBASE_URL)
-        dados = response.json()
-
-        if dados and 'musica' in dados:
-            lista = [m.strip() for m in dados['musica'].split(';') if m.strip()]
-            print(f"\n📦 Nova fila com {len(lista)} musica(s).")
-            
-            # Processa em paralelo (2 por vez para não travar o FTP)
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                executor.map(baixar_e_enviar, lista)
-            
-            limpar_firebase()
-            print("✨ Fila processada e Firebase limpo.")
+        r = requests.get(FIREBASE_URL)
+        dados = r.json()
         
-        time.sleep(5)
+        if dados:
+            # Percorre o dicionário de músicas na fila
+            for item_id in dados:
+                musica_info = dados[item_id]
+                # Pega o nome da música e o timestamp individual
+                nome = musica_info.get('musica')
+                tempo = musica_info.get('timestamp', int(time.time() * 1000))
+                
+                if nome:
+                    baixar_e_enviar(nome, tempo)
+            
+            # Limpa a fila após processar tudo
+            requests.delete(FIREBASE_URL)
+            print("✨ Fila limpa.")
+            
+        time.sleep(10)
     except Exception as e:
-        print(f"⚠️ Erro no monitoramento: {e}")
+        print(f"Erro no Loop: {e}")
         time.sleep(10)
